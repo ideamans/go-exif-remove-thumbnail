@@ -1,3 +1,36 @@
+# 仕様
+
+このプログラムは、JPEG 画像の Exif からサムネイルを削除するツールです。サムネイル意外の Exif データ保持します。
+
+## パッケージ名
+
+`exifremovethumbnail`
+
+## 関数シグネチャ
+
+```go
+func ExifRemoveThumbnail(inputPath, outputPath string) (ExifRemoveThumbnailResult, error)
+```
+
+## エラータイプ
+
+- `FormatError` - 処理としては正しいがデータフォーマットに問題がある場合に使用するエラー。
+- `Error` - ファイルが開けないなど予期しない一般エラー。
+
+## 戻り値
+
+- 情報 ExifRemoveThumbnailResult
+  - HadThumbnail 元画像のサムネイル有無
+  - BeforeSize 元画像のファイルサイズ
+  - AfterSize 出力画像のファイルサイズ
+  - ThumbnailSize サムネイルのファイルサイズ
+- エラー Error または FormatError
+
+# 使用してよいパッケージ
+
+- github.com/dsoprea/go-exif/v3
+- github.com/dsoprea/go-jpeg-image-structure/v2
+
 # 事前に作成した原案
 
 ```go
@@ -204,30 +237,6 @@ func main() {
 	fmt.Printf("Successfully removed thumbnail from %s and saved to %s\n", inputPath, outputPath)
 }
 ```
-
-# 仕様
-
-このプログラムは、JPEG 画像の Exif からサムネイルを削除するツールです。サムネイル意外の Exif データ保持します。
-
-## 関数シグネチャ
-
-```go
-func ExifRemoveThumbnail(inputPath, outputPath string) (ExifRemoveThumbnailResult, error)
-```
-
-## エラータイプ
-
-- `FormatError` - 処理としては正しいがデータフォーマットに問題がある場合に使用するエラー。
-- `Error` - ファイルが開けないなど予期しない一般エラー。
-
-## 戻り値
-
-- 情報 ExifRemoveThumbnailResult
-  - HadThumbnail 元画像のサムネイル有無
-  - BeforeSize 元画像のファイルサイズ
-  - AfterSize 出力画像のファイルサイズ
-  - ThumbnailSize サムネイルのファイルサイズ
-- エラー Error または FormatError
 
 # testdata の内容
 
@@ -776,4 +785,402 @@ func ExifRemoveThumbnail(inputPath, outputPath string) (ExifRemoveThumbnailResul
     "en": "No optimization + many frames (inefficient)"
   }
 ]
+```
+
+# メタデータの判定プログラム例
+
+以下のプログラムでは、Exif データの有無をチェックしています。テストの参考にしてください。
+
+```go
+package jpeg
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ideamans/lightfile6-core/types"
+)
+
+func TestMetadata(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cases := []struct {
+		name              string
+		file              string
+		expectedAbortType string
+		expectEXIF        bool // true if EXIF should be present
+		expectGPS         bool // true if GPS data should be present
+		description       string
+	}{
+		{
+			name:              "Basic EXIF",
+			file:              "metadata_basic_exif.jpg",
+			expectedAbortType: types.AbortTypeNothing, // Should succeed with PSNR check skipped
+			expectEXIF:        true,                   // Should have basic EXIF
+			expectGPS:         true,                   // Actually has GPS data
+			description:       "JPEG with basic EXIF metadata",
+		},
+		{
+			name:              "GPS metadata",
+			file:              "metadata_gps.jpg",
+			expectedAbortType: types.AbortTypeNothing, // Should succeed with PSNR check skipped
+			expectEXIF:        true,                   // Should have EXIF
+			expectGPS:         true,                   // Should have GPS data
+			description:       "JPEG with GPS location data",
+		},
+		{
+			name:              "Full EXIF",
+			file:              "metadata_full_exif.jpg",
+			expectedAbortType: types.AbortTypeNothing, // Should succeed with PSNR check skipped
+			expectEXIF:        true,                   // Should have comprehensive EXIF
+			expectGPS:         true,                   // Actually has GPS data
+			description:       "JPEG with comprehensive EXIF metadata",
+		},
+		{
+			name:              "No metadata",
+			file:              "metadata_none.jpg",
+			expectedAbortType: types.AbortTypeNothing, // Should succeed with PSNR check skipped
+			expectEXIF:        false,                  // Should not have EXIF
+			expectGPS:         false,                  // Should not have GPS
+			description:       "JPEG without any metadata",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputPath := filepath.Join(".", "testdata", "variations", tc.file)
+			outputPath := filepath.Join(tempDir, tc.file)
+
+			t.Logf("Testing: %s", tc.description)
+
+			// Check metadata in original file
+			originalHasEXIF, originalHasGPS := checkMetadata(t, inputPath)
+			t.Logf("Original file metadata: EXIF=%v, GPS=%v", originalHasEXIF, originalHasGPS)
+
+			// Verify our expectations match reality for the original file
+			if originalHasEXIF != tc.expectEXIF {
+				t.Errorf("Expected original EXIF presence %v, but got %v", tc.expectEXIF, originalHasEXIF)
+			}
+			if originalHasGPS != tc.expectGPS {
+				t.Errorf("Expected original GPS presence %v, but got %v", tc.expectGPS, originalHasGPS)
+			}
+
+			option := &OptimizeJpegOption{}
+			option.Quality = "medium"
+			option.SkipPsnrAssertion = true
+
+			result := Optimize(inputPath, outputPath, option)
+
+			// Check expected abort type
+			if result.AbortType != tc.expectedAbortType {
+				t.Errorf("Expected AbortType %q, got %q", tc.expectedAbortType, result.AbortType)
+				if result.AbortDetail != nil {
+					t.Logf("AbortDetail: %v", result.AbortDetail)
+				}
+			}
+
+			// Log optimization details regardless of result
+			t.Logf("Optimization result: %d -> %d bytes", result.BeforeSize, result.AfterSize)
+			t.Logf("Quality: %d, SSIM: %.6f, PSNR: %.2f", result.Quality, result.Ssim, result.FinalPsnr)
+			t.Logf("AbortType: %s", result.AbortType)
+
+			// Only check metadata preservation if optimization was successful
+			if result.AbortType == types.AbortTypeNothing {
+				// Check that output file exists
+				if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+					t.Error("Output file was not created")
+					return
+				}
+
+				// Check metadata in optimized file
+				optimizedHasEXIF, optimizedHasGPS := checkMetadata(t, outputPath)
+				t.Logf("Optimized file metadata: EXIF=%v, GPS=%v", optimizedHasEXIF, optimizedHasGPS)
+
+				// Check metadata preservation/removal
+				if originalHasEXIF && !optimizedHasEXIF {
+					t.Logf("EXIF metadata was removed during optimization")
+				} else if originalHasEXIF && optimizedHasEXIF {
+					t.Logf("EXIF metadata was preserved during optimization")
+				} else if !originalHasEXIF && optimizedHasEXIF {
+					t.Logf("EXIF metadata was added during optimization (unexpected)")
+				}
+
+				if originalHasGPS && !optimizedHasGPS {
+					t.Logf("GPS metadata was removed during optimization")
+				} else if originalHasGPS && optimizedHasGPS {
+					t.Logf("GPS metadata was preserved during optimization")
+				} else if !originalHasGPS && optimizedHasGPS {
+					t.Logf("GPS metadata was added during optimization (unexpected)")
+				}
+
+				// Log metadata preservation summary
+				exifPreserved := (originalHasEXIF && optimizedHasEXIF) || (!originalHasEXIF && !optimizedHasEXIF)
+				gpsPreserved := (originalHasGPS && optimizedHasGPS) || (!originalHasGPS && !optimizedHasGPS)
+				t.Logf("Metadata preservation: EXIF=%v, GPS=%v", exifPreserved, gpsPreserved)
+
+				// Log compression details
+				if result.BeforeSize > 0 {
+					compressionRatio := float64(result.BeforeSize-result.AfterSize) / float64(result.BeforeSize) * 100
+					t.Logf("Compression: %.1f%% reduction", compressionRatio)
+				}
+			}
+		})
+	}
+}
+
+// checkMetadata checks if a JPEG file contains EXIF and GPS metadata
+func checkMetadata(t *testing.T, filePath string) (hasEXIF bool, hasGPS bool) {
+	// Use JPEG structure parsing for metadata detection
+	return checkMetadataJPEGStructure(t, filePath)
+}
+
+// checkMetadataJPEGStructure attempts to detect EXIF/GPS using JPEG structure parsing
+func checkMetadataJPEGStructure(t *testing.T, filePath string) (hasEXIF bool, hasGPS bool) {
+	sl, err := parseJpeg(filePath)
+	if err != nil {
+		t.Logf("Failed to parse JPEG structure for %s: %v", filePath, err)
+		return false, false
+	}
+
+	// Look for APP1 segments which typically contain EXIF data
+	for _, segment := range sl.Segments() {
+		if segment.MarkerId == 0xE1 { // APP1 marker
+			// Check if this APP1 segment contains EXIF data
+			if len(segment.Data) > 6 {
+				exifHeader := string(segment.Data[:4])
+				if exifHeader == "Exif" {
+					hasEXIF = true
+					t.Logf("Found EXIF data in %s (size: %d bytes)", filepath.Base(filePath), len(segment.Data))
+					// Check for GPS data within EXIF
+					if containsGPSData(segment.Data) {
+						hasGPS = true
+						t.Logf("Found GPS data in %s", filepath.Base(filePath))
+					}
+				}
+			}
+		}
+	}
+
+	return hasEXIF, hasGPS
+}
+
+// containsGPSData checks if EXIF data contains GPS information
+func containsGPSData(exifData []byte) bool {
+	// Look for GPS IFD tags within EXIF data
+	// GPS tags typically include:
+	// - GPS Version ID (0x0000)
+	// - GPS Latitude Ref (0x0001)
+	// - GPS Latitude (0x0002)
+	// - GPS Longitude Ref (0x0003)
+	// - GPS Longitude (0x0004)
+
+	// Simple heuristic: look for common GPS tag patterns
+	// This is a simplified detection - real implementation would need proper EXIF parsing
+	gpsPatterns := []string{
+		"GPS",      // GPS string literal
+		"\x00\x01", // GPS Latitude Ref tag
+		"\x00\x02", // GPS Latitude tag
+		"\x00\x03", // GPS Longitude Ref tag
+		"\x00\x04", // GPS Longitude tag
+	}
+
+	dataStr := string(exifData)
+	for _, pattern := range gpsPatterns {
+		if contains(dataStr, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+```
+
+```go
+package jpeg
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/evanoberholster/imagemeta"
+	"github.com/ideamans/lightfile6-core/types"
+)
+
+func TestThumbnail(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cases := []struct {
+		name                    string
+		file                    string
+		expectedAbortType       string
+		expectOriginalThumbnail bool // true if original should have embedded thumbnail
+		expectFinalThumbnail    bool // true if final should have embedded thumbnail (should be false after optimization)
+	}{
+		{
+			name:                    "Embedded thumbnail",
+			file:                    "thumbnail_embedded.jpg",
+			expectedAbortType:       types.AbortTypeNothing, // Should succeed
+			expectOriginalThumbnail: true,                   // Should have thumbnail
+			expectFinalThumbnail:    false,                  // Should be removed after optimization
+		},
+		{
+			name:                    "No thumbnail",
+			file:                    "thumbnail_none.jpg",
+			expectedAbortType:       types.AbortTypeNothing, // Should succeed with PSNR check skipped
+			expectOriginalThumbnail: false,                  // Should not have thumbnail
+			expectFinalThumbnail:    false,                  // Should still not have thumbnail
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputPath := filepath.Join(".", "testdata", "variations", tc.file)
+			outputPath := filepath.Join(tempDir, tc.file)
+
+			// Check thumbnail in original file
+			originalHasThumbnail, originalThumbnailSize := checkThumbnail(t, inputPath)
+			t.Logf("Original file thumbnail: present=%v, size=%d bytes", originalHasThumbnail, originalThumbnailSize)
+
+			// Verify our expectation matches reality for the original file
+			if originalHasThumbnail != tc.expectOriginalThumbnail {
+				t.Errorf("Expected original thumbnail presence %v, but got %v", tc.expectOriginalThumbnail, originalHasThumbnail)
+			}
+
+			option := &OptimizeJpegOption{}
+			option.Quality = "medium"
+			option.SkipPsnrAssertion = true
+
+			result := Optimize(inputPath, outputPath, option)
+
+			// Check optimization result
+			if result.AbortType != tc.expectedAbortType {
+				t.Errorf("Expected AbortType %q, got %q", tc.expectedAbortType, result.AbortType)
+				if result.AbortDetail != nil {
+					t.Logf("AbortDetail: %v", result.AbortDetail)
+				}
+			}
+
+			// Log optimization results
+			t.Logf("Optimization result: %d -> %d bytes", result.BeforeSize, result.AfterSize)
+			t.Logf("Quality: %d, SSIM: %.6f, PSNR: %.2f", result.Quality, result.Ssim, result.FinalPsnr)
+			t.Logf("AbortType: %s", result.AbortType)
+
+			// Only check thumbnail removal if optimization was successful
+			if result.AbortType == types.AbortTypeNothing {
+				// Check that output file exists
+				if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+					t.Error("Output file was not created")
+					return
+				}
+
+				// Check thumbnail in optimized file
+				optimizedHasThumbnail, optimizedThumbnailSize := checkThumbnail(t, outputPath)
+				t.Logf("Optimized file thumbnail: present=%v, size=%d bytes", optimizedHasThumbnail, optimizedThumbnailSize)
+
+				// Verify thumbnail removal
+				if optimizedHasThumbnail != tc.expectFinalThumbnail {
+					t.Errorf("Expected final thumbnail presence %v, got %v", tc.expectFinalThumbnail, optimizedHasThumbnail)
+				}
+
+				// Log thumbnail removal result
+				if originalHasThumbnail && !optimizedHasThumbnail {
+					t.Logf("Thumbnail successfully removed (saved %d bytes)", originalThumbnailSize)
+				} else if !originalHasThumbnail && !optimizedHasThumbnail {
+					t.Logf("No thumbnail to remove (as expected)")
+				} else if originalHasThumbnail && optimizedHasThumbnail {
+					t.Logf("Warning: Thumbnail was not removed")
+				}
+			}
+		})
+	}
+}
+
+// checkThumbnail checks if a JPEG file contains an embedded thumbnail and returns its size
+func checkThumbnail(t *testing.T, filePath string) (hasThumbnail bool, thumbnailSize int) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		t.Fatalf("Failed to open file %s: %v", filePath, err)
+	}
+	defer file.Close()
+
+	// Parse the image metadata using imagemeta
+	em, err := imagemeta.Decode(file)
+	if err != nil {
+		t.Logf("Failed to decode image metadata for %s: %v", filePath, err)
+		return false, 0
+	}
+
+	// Check if thumbnail is present
+	// imagemeta should provide thumbnail information through EXIF data
+	if em.ThumbnailOffset > 0 && em.ThumbnailLength > 0 {
+		return true, int(em.ThumbnailLength)
+	}
+
+	// Alternative method: check for EXIF APP1 segments with thumbnail data
+	// Reset file position and try JPEG structure parsing
+	file.Seek(0, 0)
+
+	// Try to detect thumbnail using JPEG structure
+	hasThumbnailJpeg, sizeJpeg := checkThumbnailJPEGStructure(t, filePath)
+	if hasThumbnailJpeg {
+		return true, sizeJpeg
+	}
+
+	return false, 0
+}
+
+// checkThumbnailJPEGStructure attempts to detect thumbnail using JPEG structure parsing
+func checkThumbnailJPEGStructure(t *testing.T, filePath string) (hasThumbnail bool, thumbnailSize int) {
+	sl, err := parseJpeg(filePath)
+	if err != nil {
+		t.Logf("Failed to parse JPEG structure for %s: %v", filePath, err)
+		return false, 0
+	}
+
+	// Look for APP1 segments which typically contain EXIF data with thumbnails
+	for _, segment := range sl.Segments() {
+		if segment.MarkerId == 0xE1 { // APP1 marker
+			// Check if this APP1 segment contains EXIF data
+			if len(segment.Data) > 6 {
+				exifHeader := string(segment.Data[:4])
+				if exifHeader == "Exif" {
+					// This is an EXIF segment, check for thumbnail
+					if containsThumbnail(segment.Data) {
+						return true, len(segment.Data) // Approximate size
+					}
+				}
+			}
+		}
+	}
+
+	return false, 0
+}
+
+// containsThumbnail checks if EXIF data contains thumbnail information
+func containsThumbnail(exifData []byte) bool {
+	// Look for JPEG thumbnail markers within EXIF data
+	// JPEG thumbnails in EXIF typically contain SOI (0xFFD8) and EOI (0xFFD9) markers
+	for i := 0; i < len(exifData)-1; i++ {
+		if exifData[i] == 0xFF && exifData[i+1] == 0xD8 {
+			// Found SOI marker, look for corresponding EOI
+			for j := i + 2; j < len(exifData)-1; j++ {
+				if exifData[j] == 0xFF && exifData[j+1] == 0xD9 {
+					// Found EOI marker, this indicates a JPEG thumbnail
+					return true
+				}
+			}
+		}
+	}
+
+	// Look for RGB thumbnail data (less common)
+	// This is a simplified check - real implementation would need more sophisticated detection
+	if len(exifData) > 1000 { // Arbitrary size threshold for potential thumbnail data
+		return true
+	}
+
+	return false
+}
+
 ```
