@@ -20,10 +20,45 @@ go run exifremovethumbnail.go -in input.jpg -out output.jpg
 
 ### As a Library
 
-```go
-import "path/to/go-exif-remove-thumbnail"
+#### File-based operations
 
-err := RemoveExifThumbnail(inputPath, outputPath)
+```go
+import "github.com/ideamans/go-exif-remove-thumbnail"
+
+result, err := exifremovethumbnail.ExifRemoveThumbnail(inputPath, outputPath)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Thumbnail removed: %v, saved %d bytes\n", 
+    result.HadThumbnail, result.ThumbnailSize)
+```
+
+#### Memory-based operations
+
+```go
+import "github.com/ideamans/go-exif-remove-thumbnail"
+
+// Read JPEG data
+inputData, err := os.ReadFile("input.jpg")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Remove thumbnail from memory
+outputData, result, err := exifremovethumbnail.ExifRemoveThumbnailBytes(inputData)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Write the result
+err = os.WriteFile("output.jpg", outputData, 0644)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Thumbnail removed: %v, saved %d bytes\n", 
+    result.HadThumbnail, result.ThumbnailSize)
 ```
 
 ## Test

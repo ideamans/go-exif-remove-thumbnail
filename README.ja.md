@@ -20,10 +20,45 @@ go run exifremovethumbnail.go -in input.jpg -out output.jpg
 
 ### ライブラリとして利用
 
-```go
-import "path/to/go-exif-remove-thumbnail"
+#### ファイルベースの操作
 
-err := RemoveExifThumbnail(inputPath, outputPath)
+```go
+import "github.com/ideamans/go-exif-remove-thumbnail"
+
+result, err := exifremovethumbnail.ExifRemoveThumbnail(inputPath, outputPath)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("サムネイル削除: %v, 削減サイズ: %dバイト\n", 
+    result.HadThumbnail, result.ThumbnailSize)
+```
+
+#### メモリベースの操作
+
+```go
+import "github.com/ideamans/go-exif-remove-thumbnail"
+
+// JPEGデータを読み込み
+inputData, err := os.ReadFile("input.jpg")
+if err != nil {
+    log.Fatal(err)
+}
+
+// メモリ上でサムネイルを削除
+outputData, result, err := exifremovethumbnail.ExifRemoveThumbnailBytes(inputData)
+if err != nil {
+    log.Fatal(err)
+}
+
+// 結果を書き込み
+err = os.WriteFile("output.jpg", outputData, 0644)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("サムネイル削除: %v, 削減サイズ: %dバイト\n", 
+    result.HadThumbnail, result.ThumbnailSize)
 ```
 
 ## テスト
